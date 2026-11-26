@@ -210,6 +210,10 @@ pub enum Error {
     #[error("an error occurred in the context's internal backend")]
     BackendError(String),
 
+    /// No backend choices were available
+    #[error("no backend choices were available")]
+    NoBackends,
+
     /// Multiple errors occurred
     #[error("multiple errors occurred:\n{}", error_list(.0))]
     List(Vec<Self>),

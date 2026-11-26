@@ -83,7 +83,7 @@ pub fn application<State, Message, Theme, Renderer>(
     boot: impl BootFn<State, Message>,
     update: impl UpdateFn<State, Message>,
     view: impl for<'a> ViewFn<'a, State, Message, Theme, Renderer>,
-) -> Application<impl Program<State = State, Message = Message, Theme = Theme>>
+) -> Application<impl Program<State = State, Message = Message, Theme = Theme, Renderer = Renderer>>
 where
     State: 'static,
     Message: Send + 'static,
@@ -162,6 +162,7 @@ where
         settings: Settings::default(),
         window: window::Settings::default(),
         presets: Vec::new(),
+        backends: None,
     }
 }
 
@@ -178,6 +179,7 @@ pub struct Application<P: Program> {
     settings: Settings,
     window: window::Settings,
     presets: Vec<Preset<P::State, P::Message>>,
+    backends: Option<program::Backends<P>>,
 }
 
 impl<P: Program> Application<P> {
@@ -358,13 +360,28 @@ impl<P: Program> Application<P> {
         }
     }
 
-    /// Sets the [`Backend`] of the [`Application`].
+    /// Sets the [`Backend`] preference of the [`Application`].
+    ///
+    /// This replaces any [`Backends`](crate::Backends) previously set with
+    /// [`Application::backends`].
     pub fn backend(self, backend: Backend) -> Self {
         Self {
             settings: Settings {
                 backend,
                 ..self.settings
             },
+            backends: None,
+            ..self
+        }
+    }
+
+    /// Sets the prioritized list of [`Backends`](crate::Backends) of the [`Application`].
+    ///
+    /// Each choice is tried in order until one of them succeeds. This takes
+    /// precedence over [`Application::backend`].
+    pub fn backends(self, backends: impl Into<program::Backends<P>>) -> Self {
+        Self {
+            backends: Some(backends.into()),
             ..self
         }
     }
@@ -384,12 +401,15 @@ impl<P: Program> Application<P> {
     pub fn title(
         self,
         title: impl TitleFn<P::State>,
-    ) -> Application<impl Program<State = P::State, Message = P::Message, Theme = P::Theme>> {
+    ) -> Application<
+        impl Program<State = P::State, Message = P::Message, Theme = P::Theme, Renderer = P::Renderer>,
+    > {
         Application {
             raw: with_title(self.raw, title),
             settings: self.settings,
             window: self.window,
             presets: self.presets,
+            backends: self.backends,
         }
     }
 
@@ -397,12 +417,15 @@ impl<P: Program> Application<P> {
     pub fn subscription(
         self,
         f: impl Fn(&P::State) -> Subscription<P::Message>,
-    ) -> Application<impl Program<State = P::State, Message = P::Message, Theme = P::Theme>> {
+    ) -> Application<
+        impl Program<State = P::State, Message = P::Message, Theme = P::Theme, Renderer = P::Renderer>,
+    > {
         Application {
             raw: program::with_subscription(self.raw, f),
             settings: self.settings,
             window: self.window,
             presets: self.presets,
+            backends: self.backends,
         }
     }
 
@@ -410,12 +433,15 @@ impl<P: Program> Application<P> {
     pub fn theme(
         self,
         f: impl ThemeFn<P::State, P::Theme>,
-    ) -> Application<impl Program<State = P::State, Message = P::Message, Theme = P::Theme>> {
+    ) -> Application<
+        impl Program<State = P::State, Message = P::Message, Theme = P::Theme, Renderer = P::Renderer>,
+    > {
         Application {
             raw: with_theme(self.raw, f),
             settings: self.settings,
             window: self.window,
             presets: self.presets,
+            backends: self.backends,
         }
     }
 
@@ -423,12 +449,15 @@ impl<P: Program> Application<P> {
     pub fn style(
         self,
         f: impl Fn(&P::State, &P::Theme) -> theme::Style,
-    ) -> Application<impl Program<State = P::State, Message = P::Message, Theme = P::Theme>> {
+    ) -> Application<
+        impl Program<State = P::State, Message = P::Message, Theme = P::Theme, Renderer = P::Renderer>,
+    > {
         Application {
             raw: program::with_style(self.raw, f),
             settings: self.settings,
             window: self.window,
             presets: self.presets,
+            backends: self.backends,
         }
     }
 
@@ -436,19 +465,24 @@ impl<P: Program> Application<P> {
     pub fn scale_factor(
         self,
         f: impl Fn(&P::State) -> f32,
-    ) -> Application<impl Program<State = P::State, Message = P::Message, Theme = P::Theme>> {
+    ) -> Application<
+        impl Program<State = P::State, Message = P::Message, Theme = P::Theme, Renderer = P::Renderer>,
+    > {
         Application {
             raw: with_scale_factor(self.raw, f),
             settings: self.settings,
             window: self.window,
             presets: self.presets,
+            backends: self.backends,
         }
     }
 
     /// Sets the executor of the [`Application`].
     pub fn executor<E>(
         self,
-    ) -> Application<impl Program<State = P::State, Message = P::Message, Theme = P::Theme>>
+    ) -> Application<
+        impl Program<State = P::State, Message = P::Message, Theme = P::Theme, Renderer = P::Renderer>,
+    >
     where
         E: Executor,
     {
@@ -457,6 +491,7 @@ impl<P: Program> Application<P> {
             settings: self.settings,
             window: self.window,
             presets: self.presets,
+            backends: self.backends,
         }
     }
 
@@ -486,6 +521,10 @@ impl<P: Program> Program for Application<P> {
 
     fn settings(&self) -> Settings {
         self.settings.clone()
+    }
+
+    fn backends(&self) -> Option<program::Backends<Self>> {
+        self.backends.clone()
     }
 
     fn window(&self) -> Option<window::Settings> {
@@ -701,7 +740,8 @@ where
 fn with_title<P: Program>(
     program: P,
     title: impl TitleFn<P::State>,
-) -> impl Program<State = P::State, Message = P::Message, Theme = P::Theme> {
+) -> impl Program<State = P::State, Message = P::Message, Theme = P::Theme, Renderer = P::Renderer>
+{
     struct WithTitle<P, Title> {
         program: P,
         title: Title,
@@ -731,6 +771,11 @@ fn with_title<P: Program>(
         #[inline]
         fn settings(&self) -> Settings {
             self.program.settings()
+        }
+
+        #[inline]
+        fn backends(&self) -> Option<program::Backends<Self>> {
+            self.program.backends()
         }
 
         #[inline]
@@ -785,7 +830,8 @@ fn with_title<P: Program>(
 fn with_theme<P: Program>(
     program: P,
     f: impl ThemeFn<P::State, P::Theme>,
-) -> impl Program<State = P::State, Message = P::Message, Theme = P::Theme> {
+) -> impl Program<State = P::State, Message = P::Message, Theme = P::Theme, Renderer = P::Renderer>
+{
     struct WithTheme<P, F> {
         program: P,
         theme: F,
@@ -814,6 +860,11 @@ fn with_theme<P: Program>(
         #[inline]
         fn settings(&self) -> Settings {
             self.program.settings()
+        }
+
+        #[inline]
+        fn backends(&self) -> Option<program::Backends<Self>> {
+            self.program.backends()
         }
 
         #[inline]
@@ -868,7 +919,8 @@ fn with_theme<P: Program>(
 fn with_scale_factor<P: Program>(
     program: P,
     f: impl Fn(&P::State) -> f32,
-) -> impl Program<State = P::State, Message = P::Message, Theme = P::Theme> {
+) -> impl Program<State = P::State, Message = P::Message, Theme = P::Theme, Renderer = P::Renderer>
+{
     struct WithScaleFactor<P, F> {
         program: P,
         scale_factor: F,
@@ -898,6 +950,11 @@ fn with_scale_factor<P: Program>(
         #[inline]
         fn settings(&self) -> Settings {
             self.program.settings()
+        }
+
+        #[inline]
+        fn backends(&self) -> Option<program::Backends<Self>> {
+            self.program.backends()
         }
 
         #[inline]

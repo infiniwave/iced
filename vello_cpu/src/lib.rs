@@ -24,13 +24,14 @@ use crate::core::renderer;
 use crate::core::{
     Background, Color, Font, Gradient, Point, Rectangle, Size, Transformation, Vector,
 };
-use crate::graphics::compositor;
+use crate::graphics::compositor::{self, Choice, backends::Construction};
 use crate::graphics::mesh;
 use crate::graphics::text::{Editor, Paragraph};
 use crate::graphics::{Shell, Text, Viewport};
 
 use std::collections::VecDeque;
 use std::num::NonZeroU32;
+use std::sync::Arc;
 
 const ACCURACY: f64 = 0.1;
 
@@ -627,6 +628,45 @@ impl compositor::Default for Renderer {
     type Compositor = Compositor;
 }
 
+/// The options of the `vello-cpu` backend.
+///
+/// [`Options`] are a [`Choice`] for any compositor that can be created from
+/// a `vello-cpu` [`Compositor`].
+#[derive(Debug, Clone, Default, PartialEq)]
+#[non_exhaustive]
+pub struct Options {}
+
+impl Options {
+    /// Creates the default [`Options`].
+    pub fn new() -> Self {
+        Self::default()
+    }
+}
+
+impl<C> Choice<C> for Options
+where
+    C: From<Compositor> + 'static,
+{
+    fn construct<'a>(
+        &'a self,
+        settings: &'a backend::Settings,
+        display: Arc<dyn compositor::Display>,
+        _compatible_window: Arc<dyn compositor::Window>,
+        _shell: Shell,
+    ) -> Construction<'a, C> {
+        Box::pin(async move {
+            #[allow(unsafe_code)]
+            let context = softbuffer::Context::new(Box::new(display) as _)
+                .map_err(|error| backend::Error::BackendError(error.to_string()))?;
+
+            Ok(C::from(Compositor {
+                context,
+                settings: settings.clone(),
+            }))
+        })
+    }
+}
+
 pub struct Compositor {
     context: softbuffer::Context<Box<dyn compositor::Display>>,
     settings: backend::Settings,
@@ -661,26 +701,12 @@ impl graphics::Compositor for Compositor {
     type Renderer = Renderer;
     type Surface = Surface;
 
-    async fn new(
-        settings: backend::Settings,
-        display: impl compositor::Display + Clone,
-        _compatible_window: impl compositor::Window + Clone,
-        _shell: Shell,
-    ) -> Result<Self, backend::Error> {
-        if !settings.backend.is_software() && !settings.backend.matches("vello-cpu") {
-            return Err(backend::Error::GraphicsAdapterNotFound {
-                backend: "vello-cpu",
-                reason: backend::Reason::DidNotMatch {
-                    preferred_backend: settings.backend,
-                },
-            });
+    fn backends(preference: &backend::Backend) -> compositor::Backends<Self> {
+        if preference.is_software() || preference.matches("vello-cpu") {
+            compositor::Backends::new().push(Options::new())
+        } else {
+            compositor::Backends::new()
         }
-
-        #[allow(unsafe_code)]
-        let context =
-            softbuffer::Context::new(Box::new(display) as _).expect("Create softbuffer context");
-
-        Ok(Self { context, settings })
     }
 
     fn create_renderer(&self, settings: renderer::Settings) -> Renderer {

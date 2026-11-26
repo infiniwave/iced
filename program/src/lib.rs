@@ -45,6 +45,14 @@ pub trait Program: Sized {
 
     fn settings(&self) -> Settings;
 
+    /// Returns the prioritized [`Backends`] used to construct the compositor
+    /// of the [`Program`].
+    ///
+    /// If `None`, the backends that satisfy [`Settings::backend`] are used.
+    fn backends(&self) -> Option<Backends<Self>> {
+        None
+    }
+
     fn window(&self) -> Option<window::Settings>;
 
     fn boot(&self) -> (Self::State, Task<Self::Message>);
@@ -111,7 +119,8 @@ pub trait Program: Sized {
 pub fn with_subscription<P: Program>(
     program: P,
     f: impl Fn(&P::State) -> Subscription<P::Message>,
-) -> impl Program<State = P::State, Message = P::Message, Theme = P::Theme> {
+) -> impl Program<State = P::State, Message = P::Message, Theme = P::Theme, Renderer = P::Renderer>
+{
     struct WithSubscription<P, F> {
         program: P,
         subscription: F,
@@ -140,6 +149,11 @@ pub fn with_subscription<P: Program>(
         #[inline]
         fn settings(&self) -> Settings {
             self.program.settings()
+        }
+
+        #[inline]
+        fn backends(&self) -> Option<crate::Backends<Self>> {
+            self.program.backends()
         }
 
         #[inline]
@@ -197,7 +211,8 @@ pub fn with_subscription<P: Program>(
 pub fn with_style<P: Program>(
     program: P,
     f: impl Fn(&P::State, &P::Theme) -> theme::Style,
-) -> impl Program<State = P::State, Message = P::Message, Theme = P::Theme> {
+) -> impl Program<State = P::State, Message = P::Message, Theme = P::Theme, Renderer = P::Renderer>
+{
     struct WithStyle<P, F> {
         program: P,
         style: F,
@@ -226,6 +241,11 @@ pub fn with_style<P: Program>(
         #[inline]
         fn settings(&self) -> Settings {
             self.program.settings()
+        }
+
+        #[inline]
+        fn backends(&self) -> Option<crate::Backends<Self>> {
+            self.program.backends()
         }
 
         #[inline]
@@ -279,7 +299,8 @@ pub fn with_style<P: Program>(
 /// Decorates a [`Program`] with the given executor function.
 pub fn with_executor<P: Program, E: Executor>(
     program: P,
-) -> impl Program<State = P::State, Message = P::Message, Theme = P::Theme> {
+) -> impl Program<State = P::State, Message = P::Message, Theme = P::Theme, Renderer = P::Renderer>
+{
     use std::marker::PhantomData;
 
     struct WithExecutor<P, E> {
@@ -310,6 +331,11 @@ pub fn with_executor<P: Program, E: Executor>(
         #[inline]
         fn settings(&self) -> Settings {
             self.program.settings()
+        }
+
+        #[inline]
+        fn backends(&self) -> Option<crate::Backends<Self>> {
+            self.program.backends()
         }
 
         #[inline]
@@ -362,6 +388,12 @@ pub fn with_executor<P: Program, E: Executor>(
         executor: PhantomData::<E>,
     }
 }
+
+/// The compositor of some [`Program`].
+pub type Compositor<P> = <<P as Program>::Renderer as compositor::Default>::Compositor;
+
+/// The [`compositor::Backends`] of some [`Program`].
+pub type Backends<P> = compositor::Backends<Compositor<P>>;
 
 /// The renderer of some [`Program`].
 pub trait Renderer: text::Renderer + compositor::Default + renderer::Headless {}

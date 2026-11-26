@@ -23,7 +23,9 @@ pub fn timed<State, Message, Theme, Renderer>(
     update: impl UpdateFn<State, Message>,
     subscription: impl Fn(&State) -> Subscription<Message>,
     view: impl for<'a> ViewFn<'a, State, Message, Theme, Renderer>,
-) -> Application<impl Program<State = State, Message = (Message, Instant), Theme = Theme>>
+) -> Application<
+    impl Program<State = State, Message = (Message, Instant), Theme = Theme, Renderer = Renderer>,
+>
 where
     State: 'static,
     Message: Send + 'static,
@@ -123,6 +125,7 @@ where
         settings: Settings::default(),
         window: window::Settings::default(),
         presets: Vec::new(),
+        backends: None,
     }
 }
 

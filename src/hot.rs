@@ -42,6 +42,11 @@ impl<P: Program> Program for Hot<P> {
     }
 
     #[inline]
+    fn backends(&self) -> Option<crate::program::Backends<Self>> {
+        self.program.backends()
+    }
+
+    #[inline]
     fn window(&self) -> Option<window::Settings> {
         self.program.window()
     }

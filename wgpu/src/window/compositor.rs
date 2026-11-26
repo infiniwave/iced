@@ -5,6 +5,7 @@ use crate::core::renderer;
 use crate::graphics::color;
 use crate::graphics::compositor;
 use crate::graphics::{self, Antialiasing, Shell, Viewport};
+use crate::window::{self, factory};
 use crate::{Engine, Renderer};
 
 /// A window graphics backend for iced powered by `wgpu`.
@@ -32,6 +33,9 @@ pub enum Error {
     /// No device request succeeded.
     #[error("no device request succeeded: {0:?}")]
     RequestDeviceFailed(Vec<(wgpu::Limits, wgpu::RequestDeviceError)>),
+    /// The [`Factory`](factory::Factory) failed to create a device.
+    #[error("the device factory failed: {0:?}")]
+    FactoryFailed(Vec<(wgpu::Limits, factory::Error)>),
 }
 
 impl From<Error> for backend::Error {
@@ -95,10 +99,23 @@ impl Compositor {
             apply_limit_buckets: false,
         };
 
-        let adapter = instance
-            .request_adapter(&adapter_options)
-            .await
-            .map_err(|_error| Error::NoAdapterFound(format!("{adapter_options:?}")))?;
+        let custom_adapter = match &settings.factory {
+            Some(factory) => {
+                factory
+                    .0
+                    .request_adapter(&instance, compatible_surface.as_ref())
+                    .await
+            }
+            None => None,
+        };
+
+        let adapter = match custom_adapter {
+            Some(adapter) => adapter,
+            None => instance
+                .request_adapter(&adapter_options)
+                .await
+                .map_err(|_error| Error::NoAdapterFound(format!("{adapter_options:?}")))?,
+        };
 
         log::info!("Selected: {:#?}", adapter.get_info());
 
@@ -173,18 +190,28 @@ impl Compositor {
         };
 
         let mut errors = Vec::new();
+        let mut factory_errors = Vec::new();
 
         for required_limits in limits {
-            let result = adapter
-                .request_device(&wgpu::DeviceDescriptor {
-                    label: Some("iced_wgpu::window::compositor device descriptor"),
-                    required_features,
-                    required_limits: required_limits.clone(),
-                    memory_hints: wgpu::MemoryHints::MemoryUsage,
-                    trace: wgpu::Trace::Off,
-                    experimental_features: wgpu::ExperimentalFeatures::disabled(),
-                })
-                .await;
+            let descriptor = wgpu::DeviceDescriptor {
+                label: Some("iced_wgpu::window::compositor device descriptor"),
+                required_features,
+                required_limits: required_limits.clone(),
+                memory_hints: wgpu::MemoryHints::MemoryUsage,
+                trace: wgpu::Trace::Off,
+                experimental_features: wgpu::ExperimentalFeatures::disabled(),
+            };
+
+            let result = match &settings.factory {
+                Some(factory) => match factory.0.request_device(&adapter, &descriptor).await {
+                    Ok(device) => Ok(device),
+                    Err(error) => {
+                        factory_errors.push((required_limits, error));
+                        continue;
+                    }
+                },
+                None => adapter.request_device(&descriptor).await,
+            };
 
             match result {
                 Ok((device, queue)) => {
@@ -210,6 +237,10 @@ impl Compositor {
                     errors.push((required_limits, error));
                 }
             }
+        }
+
+        if !factory_errors.is_empty() {
+            return Err(Error::FactoryFailed(factory_errors));
         }
 
         Err(Error::RequestDeviceFailed(errors))
@@ -267,32 +298,19 @@ impl graphics::Compositor for Compositor {
     type Renderer = Renderer;
     type Surface = wgpu::Surface<'static>;
 
-    async fn new(
-        settings: backend::Settings,
-        display: impl compositor::Display,
-        compatible_window: impl compositor::Window,
-        shell: Shell,
-    ) -> Result<Self, backend::Error> {
-        if settings.backend.hardware().is_none() && !settings.backend.matches("wgpu") {
-            return Err(backend::Error::GraphicsAdapterNotFound {
-                backend: "wgpu",
-                reason: backend::Reason::DidNotMatch {
-                    preferred_backend: settings.backend,
-                },
-            });
+    fn backends(preference: &backend::Backend) -> compositor::Backends<Self> {
+        let backends = match preference {
+            backend::Backend::Hardware(api) => Some(wgpu_backends(*api)),
+            _ if preference.matches("wgpu") => Some(wgpu::Backends::all()),
+            _ => None,
+        };
+
+        match backends {
+            Some(backends) => {
+                compositor::Backends::new().push(window::Options::new().backends(backends))
+            }
+            None => compositor::Backends::new(),
         }
-
-        let mut settings = Settings::from(settings);
-
-        if let Some(backends) = wgpu::Backends::from_env() {
-            settings.backends = backends;
-        }
-
-        if let Some(present_mode) = present_mode_from_env() {
-            settings.present_mode = present_mode;
-        }
-
-        Ok(new(settings, display, compatible_window, shell).await?)
     }
 
     fn create_renderer(&self, settings: renderer::Settings) -> Self::Renderer {
@@ -359,7 +377,7 @@ impl graphics::Compositor for Compositor {
 }
 
 /// The settings of a [`Compositor`].
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct Settings {
     /// The present mode of the [`Renderer`].
     ///
@@ -378,6 +396,10 @@ pub struct Settings {
     ///
     /// By default, it is `None`.
     pub antialiasing: Option<Antialiasing>,
+
+    /// The [`Factory`](factory::Factory) used to choose the adapter and
+    /// create the device, if any.
+    pub factory: Option<factory::Shared>,
 }
 
 impl Default for Settings {
@@ -387,6 +409,25 @@ impl Default for Settings {
             backends: wgpu::Backends::all(),
             power_preference: backend::PowerPreference::None,
             antialiasing: None,
+            factory: None,
+        }
+    }
+}
+
+impl Settings {
+    /// Creates the [`Settings`] of a [`Compositor`] from the given
+    /// [`backend::Settings`] and [`window::Options`].
+    pub fn new(settings: &backend::Settings, options: &window::Options) -> Self {
+        Self {
+            factory: options.factory.clone(),
+            present_mode: if settings.vsync {
+                wgpu::PresentMode::AutoVsync
+            } else {
+                wgpu::PresentMode::AutoNoVsync
+            },
+            antialiasing: settings.antialiasing.then_some(Antialiasing::MSAAx4),
+            backends: options.backends,
+            power_preference: settings.power_preference,
         }
     }
 }
@@ -396,26 +437,23 @@ impl From<backend::Settings> for Settings {
         let backends = settings
             .backend
             .hardware()
-            .map(|api| match api {
-                backend::Api::Best => wgpu::Backends::all(),
-                backend::Api::Vulkan => wgpu::Backends::VULKAN,
-                backend::Api::Metal => wgpu::Backends::METAL,
-                backend::Api::DirectX12 => wgpu::Backends::DX12,
-                backend::Api::OpenGL => wgpu::Backends::GL,
-                backend::Api::WebGPU => wgpu::Backends::BROWSER_WEBGPU,
-            })
+            .map(wgpu_backends)
             .unwrap_or_else(wgpu::Backends::all);
 
-        Self {
-            present_mode: if settings.vsync {
-                wgpu::PresentMode::AutoVsync
-            } else {
-                wgpu::PresentMode::AutoNoVsync
-            },
-            antialiasing: settings.antialiasing.then_some(Antialiasing::MSAAx4),
-            backends,
-            power_preference: settings.power_preference,
-        }
+        Self::new(&settings, &window::Options::new().backends(backends))
+    }
+}
+
+/// Returns the [`wgpu::Backends`] that correspond to the given
+/// [`backend::Api`].
+pub fn wgpu_backends(api: backend::Api) -> wgpu::Backends {
+    match api {
+        backend::Api::Best => wgpu::Backends::all(),
+        backend::Api::Vulkan => wgpu::Backends::VULKAN,
+        backend::Api::Metal => wgpu::Backends::METAL,
+        backend::Api::DirectX12 => wgpu::Backends::DX12,
+        backend::Api::OpenGL => wgpu::Backends::GL,
+        backend::Api::WebGPU => wgpu::Backends::BROWSER_WEBGPU,
     }
 }
 

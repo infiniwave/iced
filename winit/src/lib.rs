@@ -83,6 +83,7 @@ where
         .expect("Create event loop");
 
     let backend_settings = backend::Settings::from(&settings);
+    let backends = program.backends();
     let renderer_settings = renderer::Settings::from(&settings);
     let display_handle = event_loop.owned_display_handle();
 
@@ -138,6 +139,7 @@ where
         display_handle,
         is_daemon,
         backend_settings,
+        backends,
         renderer_settings,
         settings.fonts,
         system_theme_receiver,
@@ -472,6 +474,7 @@ async fn run_instance<P>(
     display_handle: winit::event_loop::OwnedDisplayHandle,
     is_daemon: bool,
     backend_settings: backend::Settings,
+    backends: Option<program::Backends<P>>,
     mut renderer_settings: renderer::Settings,
     default_fonts: Vec<Cow<'static, [u8]>>,
     mut _system_theme: oneshot::Receiver<theme::Mode>,
@@ -554,6 +557,9 @@ async fn run_instance<P>(
                     let create_compositor = {
                         let window = window.clone();
                         let backend_settings = backend_settings.clone();
+                        let backends = backends.clone().unwrap_or_else(|| {
+                            program::Backends::<P>::preferred(&backend_settings.backend)
+                        });
                         let display_handle = display_handle.clone();
                         let proxy = proxy.clone();
                         let default_fonts = default_fonts.clone();
@@ -561,10 +567,10 @@ async fn run_instance<P>(
                         async move {
                             let shell = Shell::new(proxy.clone());
 
-                            let mut compositor =
-                                <P::Renderer as compositor::Default>::Compositor::new(
-                                    backend_settings,
-                                    display_handle,
+                            let mut compositor = backends
+                                .construct(
+                                    &backend_settings,
+                                    Arc::new(display_handle),
                                     window,
                                     shell,
                                 )
@@ -1727,12 +1733,28 @@ fn run_action<'a, P, C>(
         },
         Action::Backend(action) => match action {
             #[cfg(not(target_arch = "wasm32"))]
-            backend::Action::Configure(settings, sender) => {
+            backend::Action::Configure(settings, backends, sender) => {
                 let shell = Shell::new(_proxy.clone());
 
+                let backends = match backends {
+                    Some(backends) => match backends.downcast::<compositor::Backends<C>>() {
+                        Ok(backends) => backends,
+                        Err(_) => {
+                            let _ = sender.send(Err(crate::core::backend::Error::BackendError(
+                                format!(
+                                    "the provided backends are not backends of `{}`",
+                                    std::any::type_name::<C>()
+                                ),
+                            )));
+                            return;
+                        }
+                    },
+                    None => C::backends(&settings.backend),
+                };
+
                 let mut new_compositor = if let Some(window) = window_manager.first() {
-                    match runtime.block_on(C::new(
-                        settings,
+                    match runtime.block_on(backends.construct(
+                        &settings,
                         window.raw.clone(),
                         window.raw.clone(),
                         shell,
@@ -1765,7 +1787,7 @@ fn run_action<'a, P, C>(
                 let _ = sender.send(Ok(()));
             }
             #[cfg(target_arch = "wasm32")]
-            backend::Action::Configure(_, _) => {}
+            backend::Action::Configure(_, _, _) => {}
         },
         Action::Event { window, event } => {
             events.push((window, event));

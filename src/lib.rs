@@ -653,11 +653,50 @@ pub mod widget {
 pub mod backend {
     //! Graphical backends are designed to aid in rendering computer graphics to a monitor.
     pub use iced_core::backend::*;
+    pub use iced_renderer::Backends;
+    pub use iced_renderer::graphics::compositor::Choice;
+    pub use iced_renderer::graphics::compositor::backends::Construction;
     pub use iced_runtime::backend::*;
+
+    /// Returns a [`Task`](crate::Task) that switches the [`Settings`] of the
+    /// current application, using the given [`Backends`].
+    ///
+    /// The [`Backends`] are tried in order until one of them succeeds.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub fn configure_with(
+        settings: Settings,
+        backends: impl Into<Backends>,
+    ) -> crate::Task<Result<(), Error>> {
+        let backends: iced_renderer::graphics::compositor::Backends<iced_renderer::Compositor> =
+            backends.into().into();
+
+        iced_runtime::backend::configure_with(
+            settings,
+            iced_runtime::backend::AnyBackends::new(backends),
+        )
+    }
+
+    #[cfg(feature = "wgpu-bare")]
+    pub mod wgpu {
+        //! Configure the `wgpu` backend.
+        //!
+        //! Use [`Options`] with [`Backends::wgpu`](super::Backends::wgpu).
+        pub use iced_renderer::wgpu::window::Options;
+        pub use iced_renderer::wgpu::window::factory::{self, Factory};
+    }
+
+    #[cfg(feature = "vello-cpu")]
+    pub mod vello_cpu {
+        //! Configure the `vello-cpu` backend.
+        //!
+        //! Use [`Options`] with [`Backends::vello_cpu`](super::Backends::vello_cpu).
+        pub use iced_renderer::vello_cpu::Options;
+    }
 }
 
 pub use application::Application;
 pub use backend::Backend;
+pub use backend::Backends;
 pub use backend::PowerPreference;
 pub use daemon::Daemon;
 pub use error::Error;

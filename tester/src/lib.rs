@@ -65,6 +65,10 @@ where
         settings
     }
 
+    fn backends(&self) -> Option<crate::program::Backends<Self>> {
+        self.program.backends()
+    }
+
     fn window(&self) -> Option<window::Settings> {
         Some(
             self.program

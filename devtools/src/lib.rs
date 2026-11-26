@@ -66,6 +66,11 @@ where
     }
 
     #[inline]
+    fn backends(&self) -> Option<program::Backends<Self>> {
+        self.program.backends()
+    }
+
+    #[inline]
     fn window(&self) -> Option<window::Settings> {
         self.program.window()
     }

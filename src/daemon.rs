@@ -27,7 +27,7 @@ pub fn daemon<State, Message, Theme, Renderer>(
     boot: impl application::BootFn<State, Message>,
     update: impl application::UpdateFn<State, Message>,
     view: impl for<'a> ViewFn<'a, State, Message, Theme, Renderer>,
-) -> Daemon<impl Program<State = State, Message = Message, Theme = Theme>>
+) -> Daemon<impl Program<State = State, Message = Message, Theme = Theme, Renderer = Renderer>>
 where
     State: 'static,
     Message: Send + 'static,
@@ -105,6 +105,7 @@ where
         },
         settings: Settings::default(),
         presets: Vec::new(),
+        backends: None,
     }
 }
 
@@ -120,6 +121,7 @@ pub struct Daemon<P: Program> {
     raw: P,
     settings: Settings,
     presets: Vec<Preset<P::State, P::Message>>,
+    backends: Option<program::Backends<P>>,
 }
 
 impl<P: Program> Daemon<P> {
@@ -167,6 +169,18 @@ impl<P: Program> Daemon<P> {
         }
     }
 
+    /// Sets the prioritized list of [`Backends`](crate::Backends) of the
+    /// [`Daemon`].
+    ///
+    /// Each choice is tried in order until one of them succeeds. This takes
+    /// precedence over [`Settings::backend`].
+    pub fn backends(self, backends: impl Into<program::Backends<P>>) -> Self {
+        Self {
+            backends: Some(backends.into()),
+            ..self
+        }
+    }
+
     /// Sets the default [`Font`] of the [`Daemon`].
     pub fn default_font(self, default_font: Font) -> Self {
         Self {
@@ -202,7 +216,9 @@ impl<P: Program> Daemon<P> {
     pub fn title(
         self,
         title: impl TitleFn<P::State>,
-    ) -> Daemon<impl Program<State = P::State, Message = P::Message, Theme = P::Theme>> {
+    ) -> Daemon<
+        impl Program<State = P::State, Message = P::Message, Theme = P::Theme, Renderer = P::Renderer>,
+    > {
         Daemon {
             raw: WithTitle {
                 program: self.raw,
@@ -210,6 +226,7 @@ impl<P: Program> Daemon<P> {
             },
             settings: self.settings,
             presets: self.presets,
+            backends: self.backends,
         }
     }
 
@@ -217,11 +234,14 @@ impl<P: Program> Daemon<P> {
     pub fn subscription(
         self,
         f: impl Fn(&P::State) -> Subscription<P::Message>,
-    ) -> Daemon<impl Program<State = P::State, Message = P::Message, Theme = P::Theme>> {
+    ) -> Daemon<
+        impl Program<State = P::State, Message = P::Message, Theme = P::Theme, Renderer = P::Renderer>,
+    > {
         Daemon {
             raw: program::with_subscription(self.raw, f),
             settings: self.settings,
             presets: self.presets,
+            backends: self.backends,
         }
     }
 
@@ -229,7 +249,9 @@ impl<P: Program> Daemon<P> {
     pub fn theme(
         self,
         f: impl ThemeFn<P::State, P::Theme>,
-    ) -> Daemon<impl Program<State = P::State, Message = P::Message, Theme = P::Theme>> {
+    ) -> Daemon<
+        impl Program<State = P::State, Message = P::Message, Theme = P::Theme, Renderer = P::Renderer>,
+    > {
         Daemon {
             raw: WithTheme {
                 program: self.raw,
@@ -237,6 +259,7 @@ impl<P: Program> Daemon<P> {
             },
             settings: self.settings,
             presets: self.presets,
+            backends: self.backends,
         }
     }
 
@@ -244,11 +267,14 @@ impl<P: Program> Daemon<P> {
     pub fn style(
         self,
         f: impl Fn(&P::State, &P::Theme) -> theme::Style,
-    ) -> Daemon<impl Program<State = P::State, Message = P::Message, Theme = P::Theme>> {
+    ) -> Daemon<
+        impl Program<State = P::State, Message = P::Message, Theme = P::Theme, Renderer = P::Renderer>,
+    > {
         Daemon {
             raw: program::with_style(self.raw, f),
             settings: self.settings,
             presets: self.presets,
+            backends: self.backends,
         }
     }
 
@@ -256,7 +282,9 @@ impl<P: Program> Daemon<P> {
     pub fn scale_factor(
         self,
         f: impl Fn(&P::State, window::Id) -> f32,
-    ) -> Daemon<impl Program<State = P::State, Message = P::Message, Theme = P::Theme>> {
+    ) -> Daemon<
+        impl Program<State = P::State, Message = P::Message, Theme = P::Theme, Renderer = P::Renderer>,
+    > {
         Daemon {
             raw: WithScaleFactor {
                 program: self.raw,
@@ -264,13 +292,16 @@ impl<P: Program> Daemon<P> {
             },
             settings: self.settings,
             presets: self.presets,
+            backends: self.backends,
         }
     }
 
     /// Sets the executor of the [`Daemon`].
     pub fn executor<E>(
         self,
-    ) -> Daemon<impl Program<State = P::State, Message = P::Message, Theme = P::Theme>>
+    ) -> Daemon<
+        impl Program<State = P::State, Message = P::Message, Theme = P::Theme, Renderer = P::Renderer>,
+    >
     where
         E: Executor,
     {
@@ -278,6 +309,7 @@ impl<P: Program> Daemon<P> {
             raw: program::with_executor::<P, E>(self.raw),
             settings: self.settings,
             presets: self.presets,
+            backends: self.backends,
         }
     }
 
@@ -307,6 +339,10 @@ impl<P: Program> Program for Daemon<P> {
 
     fn settings(&self) -> Settings {
         self.settings.clone()
+    }
+
+    fn backends(&self) -> Option<program::Backends<Self>> {
+        self.backends.clone()
     }
 
     fn window(&self) -> Option<window::Settings> {
@@ -475,6 +511,11 @@ where
     }
 
     #[inline]
+    fn backends(&self) -> Option<program::Backends<Self>> {
+        self.program.backends()
+    }
+
+    #[inline]
     fn window(&self) -> Option<window::Settings> {
         self.program.window()
     }
@@ -551,6 +592,11 @@ where
     }
 
     #[inline]
+    fn backends(&self) -> Option<program::Backends<Self>> {
+        self.program.backends()
+    }
+
+    #[inline]
     fn window(&self) -> Option<window::Settings> {
         self.program.window()
     }
@@ -624,6 +670,11 @@ where
     #[inline]
     fn settings(&self) -> Settings {
         self.program.settings()
+    }
+
+    #[inline]
+    fn backends(&self) -> Option<program::Backends<Self>> {
+        self.program.backends()
     }
 
     #[inline]

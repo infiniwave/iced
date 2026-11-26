@@ -1,11 +1,15 @@
 //! A compositor is responsible for initializing a renderer and managing window
 //! surfaces.
+pub mod backends;
+
+pub use backends::{Backends, Choice};
+
+use crate::Viewport;
 use crate::core::Color;
-use crate::core::backend;
+use crate::core::backend::{self, Backend};
 use crate::core::font;
 use crate::core::renderer;
 use crate::futures::{MaybeSend, MaybeSync};
-use crate::{Shell, Viewport};
 
 use raw_window_handle::{HasDisplayHandle, HasWindowHandle};
 use thiserror::Error;
@@ -21,13 +25,11 @@ pub trait Compositor: Sized {
     /// The surface of the backend.
     type Surface;
 
-    /// Creates a new [`Compositor`] with the given [`backend::Settings`].
-    fn new(
-        settings: backend::Settings,
-        display: impl Display + Clone,
-        compatible_window: impl Window + Clone,
-        shell: Shell,
-    ) -> impl Future<Output = Result<Self, backend::Error>>;
+    /// Returns the [`Backends`] that satisfy the given [`Backend`] preference.
+    ///
+    /// This is used when no explicit [`Backends`] are provided. The result
+    /// may be empty if the [`Compositor`] cannot satisfy the preference.
+    fn backends(preference: &Backend) -> Backends<Self>;
 
     /// Creates a [`Self::Renderer`] for the [`Compositor`].
     fn create_renderer(&self, settings: renderer::Settings) -> Self::Renderer;
@@ -153,13 +155,8 @@ impl Compositor for () {
     type Renderer = ();
     type Surface = ();
 
-    async fn new(
-        _settings: backend::Settings,
-        _display: impl Display,
-        _compatible_window: impl Window + Clone,
-        _shell: Shell,
-    ) -> Result<Self, backend::Error> {
-        Ok(())
+    fn backends(_preference: &Backend) -> Backends<Self> {
+        Backends::new().push(Null)
     }
 
     fn create_renderer(&self, _settings: renderer::Settings) -> Self::Renderer {}
@@ -207,4 +204,22 @@ impl Compositor for () {
 #[cfg(debug_assertions)]
 impl Default for () {
     type Compositor = ();
+}
+
+/// The [`Choice`] of the null `()` compositor.
+#[cfg(debug_assertions)]
+#[derive(Debug)]
+struct Null;
+
+#[cfg(debug_assertions)]
+impl Choice<()> for Null {
+    fn construct<'a>(
+        &'a self,
+        _settings: &'a backend::Settings,
+        _display: std::sync::Arc<dyn Display>,
+        _compatible_window: std::sync::Arc<dyn Window>,
+        _shell: crate::Shell,
+    ) -> backends::Construction<'a, ()> {
+        Box::pin(async { Ok(()) })
+    }
 }
